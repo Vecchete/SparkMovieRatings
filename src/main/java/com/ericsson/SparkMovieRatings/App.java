@@ -11,6 +11,7 @@ import org.apache.spark.sql.types.Metadata;
 import org.apache.spark.api.java.*;
 import java.util.*;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.MapFunction;
 import java.lang.*;
 import java.io.File;
 import java.io.IOException;
@@ -55,39 +56,51 @@ public class App{
 		
 		Map<Integer,String> movieNames = obj.loadMovieNames();
 		JavaRDD<String> lines = spark.read().textFile("hdfs:///ml-100k/u.data").javaRDD();
-		JavaRDD<Row> movies = lines.map(new Function<String,Row>(){
-			public Row call(String line) throws Exception{
-				String[] fields = line.split(" ");
-				int movieID = Integer.parseInt(fields[1]);
-				float rating = Float.parseFloat(fields[2]);
-				List<Object> row = new ArrayList<Object>();
-				row.add(movieID);
-				row.add(rating);
-				Row rowrdd = RowFactory.create(row);
-				return rowrdd;
-			}
+		
+		JavaRDD<MovieRatings> movies = lines.map(line -> {
+			String[] parts = line.split(" ");
+			MovieRatings ratingsObject = new MovieRatings();
+			ratingsObject.setMovieID(Integer.parseInt(parts[1].trim()));
+			ratingsObject.setRating(Integer.parseInt(parts[2].trim()));
+			return ratingsObject;
 		});
 		
-		StructType schema = new StructType(new StructField[]{
-			new StructField("movieID",DataTypes.IntegerType,false,Metadata.empty()),
-			new StructField("rating",DataTypes.FloatType,false,Metadata.empty())
-		});
+		Dataset<Row> movieDataset = spark.createDataFrame(movies, MovieRatings.class);
 		
+		Encoder<Integer> intEncoder = Encoders.INT();
+		Dataset<Integer> HUE = movieDataset.map(
+				new MapFunction<Row, Integer>(){
+					
+					private static final long serialVersionUID = -5982149277350252630L;
+
+					@Override
+					public Integer call(Row row) throws Exception{
+						return row.getInt(0);
+					}
+				}, intEncoder
+		);
 		
-		Dataset<Row> movieDataset = spark.createDataFrame(movies, schema);
+		HUE.show();
+		
 		Dataset<Row> averageRatings = movieDataset.groupBy("movieID").avg("rating");
 		Dataset<Row> counts = movieDataset.groupBy("movieID").count();
 		Dataset<Row> averagesAndCounts = counts.join(averageRatings, "movieID");
 		Dataset<Row> relationAVGCount = averagesAndCounts.withColumn("ratio", ((averagesAndCounts.col("count").divide(100000)).	multiply(averagesAndCounts.col("avg(rating)"))).plus(averagesAndCounts.col("avg(rating)")));
 		
-		Dataset<Row>topTen = relationAVGCount.sort(relationAVGCount.col("ratio").desc()).filter((relationAVGCount.col("count")).geq(27));
-		//Dataset<Row>top = topTen.take(10);
+		Dataset<Row> top = relationAVGCount.sort(relationAVGCount.col("ratio").desc()).filter((relationAVGCount.col("count")).geq(27));
 		
-		//Iterator<Row> rowsAsIterator = topTen.toLocalIterator();
-/*		while (rowsAsIterator.hasNext()) {
-			Row it = rowsAsIterator.next();
-			System.out.println(it.mkString());
-		}*/
+		Dataset<Row> topTen = top.limit(10);
+		
+		//topTen.show(5);
+		
+		//ListIterator<Row> rowsAsIterator = rows.listIterator();
+		for (int i = 0; i<10;i++) {
+			/*if(rowsAsIterator.hasNext()) {
+				Row it = rowsAsIterator.next();
+				System.out.println(it.mkString());
+			}*/
+			System.out.println("HUE " + i);
+		}
 		
 		String result = movieNames.get(1);
 		System.out.println("Eu tentei "+ result);
